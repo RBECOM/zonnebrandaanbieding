@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+"""Build a conservative sunscreen selection from the Plein Daisycon feed."""
+
+import argparse
+import csv
+import html
+import json
+import os
+import re
+import sys
+import urllib.request
+from collections import defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+DIRECT_CATEGORIES = {"zonnebrandolie", "zon"}
+EXCLUDE = re.compile(r"after\s*sun|zelfbruin|self.?tan|bruinings|tan accelerator|huisdier|hond|haar", re.I)
+SUN_TERMS = re.compile(r"zonnebrand|zonnecr[eè]me|sun\s*(?:cream|lotion|spray|fluid|stick)|suncare|solaire|anthelios", re.I)
+PROMO = re.compile(r"^(\d+)\s*\+\s*(\d+)\s*gratis:|^2e\s+halve\s+prijs:", re.I)
+PACK = re.compile(r"^\s*(\d+)\s*x\s+", re.I)
+SPF = re.compile(r"\bSPF\s*([0-9]{1,2})(\+)?", re.I)
+ML = re.compile(r"([0-9]+(?:[.,][0-9]+)?)\s*ml\b", re.I)
+
+
+def number(value, default=0.0):
+    try:
+        return float(str(value).replace(",", "."))
+    except (TypeError, ValueError):
+        return default
+
+
+def fetch_rows(source):
+    if source.startswith(("https://", "http://")):
+        request = urllib.request.Request(source, headers={"User-Agent": "zonnebrandaanbieding-feed/1.0"})
+        handle = urllib.request.urlopen(request, timeout=180)
+        text = (line.decode("utf-8-sig") for line in handle)
+        return csv.DictReader(text, delimiter=";")
+    handle = open(source, encoding="utf-8-sig", newline="")
+    return csv.DictReader(handle, delimiter=";")
+
+
+def normalize(row):
+    title = (row.get("title") or "").strip()
+    category = (row.get("category") or "").strip()
+    text = f"{title} {category} {row.get('description', '')}"
+    if (row.get("in_stock") or "").lower() != "true":
+        return None
+    if not row.get("image_default") or not row.get("link"):
+        return None
+    if EXCLUDE.search(text):
+        return None
+    if category.lower() not in DIRECT_CATEGORIES and not SUN_TERMS.search(title):
+        return None
+
+    spf_match = SPF.search(title)
+    spf = int(spf_match.group(1)) if spf_match else None
+    if not spf or spf < 15:
+        return None
+
+    price = number(row.get("price"))
+    if price <= 0:
+        return None
+    old_price = number(row.get("price_old"))
+    discount = int(round(number(row.get("discount_percentage"))))
+    promo_match = PROMO.search(title)
+    promo = promo_match.group(0).rstrip(":") if promo_match else ""
+
+    pack_match = PACK.search(title)
+    pack_count = int(pack_match.group(1)) if pack_match else 1
+    size_text = (row.get("size") or "").strip()
+    ml_match = ML.search(size_text)
+    unit_ml = number(ml_match.group(1)) if ml_match else None
+    total_ml = unit_ml * pack_count if unit_ml else None
+    reliable_unit_price = bool(total_ml and not promo)
+    price_per_100ml = round(price / total_ml * 100, 2) if reliable_unit_price else None
+
+    lowered = title.lower()
+    if re.search(r"kids?|baby|kind", lowered):
+        use_case = "kinderen"
+    elif re.search(r"gezicht|face|fluid|flu[iï]de|anti-shine", lowered):
+        use_case = "gezicht"
+    elif re.search(r"stick|lip", lowered):
+        use_case = "onderweg"
+    else:
+        use_case = "lichaam"
+
+    clean_title = re.sub(r"^(?:\d+\s*x\s+|\d+\s*\+\s*\d+\s*gratis:\s*|2e\s+halve\s+prijs:\s*)", "", title, flags=re.I)
+    return {
+        "sku": row.get("sku", ""),
+        "ean": row.get("ean", ""),
+        "brand": row.get("brand", ""),
+        "title": clean_title,
+        "full_title": title,
+        "category": category,
+        "use_case": use_case,
+        "spf": spf,
+        "spf_plus": bool(spf_match and spf_match.group(2)),
+        "price": round(price, 2),
+        "old_price": round(old_price, 2) if old_price > price else None,
+        "discount_percentage": discount if discount > 0 else None,
+        "promotion": promo or None,
+        "pack_count": pack_count,
+        "unit_ml": unit_ml,
+        "total_ml": total_ml,
+        "price_per_100ml": price_per_100ml,
+        "shipping": number(row.get("price_shipping"), None),
+        "image": row.get("image_default") or row.get("image_small"),
+        "url": row.get("link"),
+    }
+
+
+def deduplicate(products):
+    # Keep one listing per EAN/use case. Prefer a real discount, then the lowest reliable unit price.
+    grouped = defaultdict(list)
+    for product in products:
+        grouped[(product["ean"] or product["sku"], product["use_case"])].append(product)
+    result = []
+    for group in grouped.values():
+        group.sort(key=lambda p: (
+            -(p["discount_percentage"] or 0),
+            p["price_per_100ml"] if p["price_per_100ml"] is not None else 999999,
+            p["price"],
+        ))
+        result.append(group[0])
+    return result
+
+
+def choose(products):
+    by_case = defaultdict(list)
+    for product in products:
+        by_case[product["use_case"]].append(product)
+
+    def diverse(items, limit=8):
+        """Prefer variety; fill remaining slots only after each brand had a turn."""
+        chosen = []
+        used_brands = set()
+        for product in items:
+            brand = product["brand"].strip().casefold()
+            if brand and brand in used_brands:
+                continue
+            chosen.append(product)
+            used_brands.add(brand)
+            if len(chosen) == limit:
+                return chosen
+        for product in items:
+            if product not in chosen:
+                chosen.append(product)
+            if len(chosen) == limit:
+                break
+        return chosen
+
+    def value_items(case, limit=8, min_spf=30):
+        items = [p for p in by_case[case] if p["spf"] >= min_spf and p["price_per_100ml"] is not None]
+        items.sort(key=lambda p: (p["price_per_100ml"], p["price"]))
+        return diverse(items, limit)
+
+    deals = [p for p in products if p["spf"] >= 30 and (p["discount_percentage"] or p["promotion"])]
+    deals.sort(key=lambda p: (
+        -(p["discount_percentage"] or (50 if p["promotion"] else 0)),
+        p["price_per_100ml"] if p["price_per_100ml"] is not None else 999999,
+        p["price"],
+    ))
+
+    return {
+        "deals": diverse(deals, 12),
+        "lichaam": value_items("lichaam"),
+        "kinderen": value_items("kinderen"),
+        "gezicht": value_items("gezicht"),
+        "onderweg": value_items("onderweg", min_spf=30),
+    }
+
+
+def money(value):
+    return f"€ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def product_card(product):
+    title = html.escape(product["full_title"] or product["title"])
+    brand = html.escape(product["brand"] or "Plein.nl")
+    badge = product["promotion"] or (
+        f"{product['discount_percentage']}% korting" if product["discount_percentage"] else f"SPF {product['spf']}"
+    )
+    if product["price_per_100ml"] is not None:
+        unit = f"{money(product['price_per_100ml'])} per 100 ml"
+    else:
+        unit = "Bekijk de actievoorwaarden bij Plein.nl"
+    old_price = f'<del>{money(product["old_price"])}</del>' if product["old_price"] else ""
+    return (
+        '<article class="feed-card">'
+        f'<span class="feed-label">{html.escape(badge)}</span>'
+        f'<img src="{html.escape(product["image"], quote=True)}" alt="{title}" loading="lazy" width="320" height="240">'
+        '<div class="feed-card-body">'
+        f'<span class="feed-brand">{brand}</span><h3>{title}</h3>'
+        f'<div class="feed-price"><strong>{money(product["price"])}</strong>{old_price}</div>'
+        f'<p class="feed-unit">{html.escape(unit)}</p>'
+        f'<a href="{html.escape(product["url"], quote=True)}" rel="sponsored nofollow noopener" target="_blank">Bekijk bij Plein.nl <span aria-hidden="true">→</span></a>'
+        '</div></article>'
+    )
+
+
+def replace_region(path, name, products):
+    start = f"<!-- FEED:{name}:START -->"
+    end = f"<!-- FEED:{name}:END -->"
+    text = path.read_text(encoding="utf-8")
+    if start not in text or end not in text:
+        raise RuntimeError(f"Missing feed markers {name} in {path}")
+    cards = "\n".join(product_card(item) for item in products)
+    replacement = f'{start}\n<div class="feed-grid">\n{cards}\n</div>\n{end}'
+    before, rest = text.split(start, 1)
+    _, after = rest.split(end, 1)
+    path.write_text(before + replacement + after, encoding="utf-8")
+
+
+def update_pages(root, selections):
+    replace_region(root / "index.html", "HOME", selections["deals"][:6])
+    replace_region(root / "zonnebrand-kinderen.html", "KINDEREN", selections["kinderen"][:3])
+    replace_region(root / "zonnebrand-gezicht.html", "GEZICHT", selections["gezicht"][:3])
+    replace_region(root / "spf-30-of-50.html", "SPF", selections["lichaam"][:3])
+    winter = [p for p in selections["gezicht"] + selections["onderweg"] if p["spf"] >= 50]
+    replace_region(root / "zonnebrand-wintersport.html", "WINTERSPORT", diverse_products(winter, 3))
+
+
+def diverse_products(items, limit):
+    chosen, brands = [], set()
+    for item in items:
+        brand = item["brand"].strip().casefold()
+        if brand in brands:
+            continue
+        chosen.append(item)
+        brands.add(brand)
+        if len(chosen) == limit:
+            break
+    return chosen
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", help="Local CSV path. Otherwise DAISYCON_FEED_URL is used.")
+    parser.add_argument("--output", default="data/products.json")
+    args = parser.parse_args()
+    source = args.input or os.environ.get("DAISYCON_FEED_URL")
+    if not source:
+        sys.exit("Missing --input or DAISYCON_FEED_URL")
+
+    products = []
+    total_rows = 0
+    for row in fetch_rows(source):
+        total_rows += 1
+        item = normalize(row)
+        if item:
+            products.append(item)
+    products = deduplicate(products)
+    selections = choose(products)
+    payload = {
+        "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "source": "Plein.nl via Daisycon",
+        "total_feed_products": total_rows,
+        "eligible_sun_products": len(products),
+        "shipping_note": "Bezorgkosten gelden per bestelling en kunnen afhangen van de winkelmand.",
+        "selections": selections,
+    }
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    update_pages(Path(__file__).resolve().parents[1], selections)
+    counts = ", ".join(f"{key}={len(value)}" for key, value in selections.items())
+    print(f"Processed {total_rows} rows; eligible={len(products)}; {counts}")
+
+
+if __name__ == "__main__":
+    main()
