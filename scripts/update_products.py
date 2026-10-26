@@ -11,6 +11,7 @@ import sys
 import urllib.request
 from collections import defaultdict
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
 
@@ -28,6 +29,10 @@ def number(value, default=0.0):
         return float(str(value).replace(",", "."))
     except (TypeError, ValueError):
         return default
+
+
+def round_money(value):
+    return float(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 def fetch_rows(source):
@@ -75,6 +80,26 @@ def normalize(row):
     reliable_unit_price = bool(total_ml and not promo)
     price_per_100ml = round(price / total_ml * 100, 2) if reliable_unit_price else None
 
+    offer_quantity = pack_count
+    offer_total = price
+    effective_each = price / pack_count
+    if promo_match:
+        promo_lower = promo.lower()
+        free_match = re.match(r"(\d+)\s*\+\s*(\d+)\s*gratis", promo_lower)
+        if free_match:
+            paid, free = map(int, free_match.groups())
+            offer_quantity = paid + free
+            offer_total = price * paid
+            effective_each = offer_total / offer_quantity
+        elif promo_lower.startswith("2e halve prijs"):
+            offer_quantity = 2
+            offer_total = round_money(price * 1.5)
+            effective_each = offer_total / 2
+    offer_total_ml = unit_ml * offer_quantity if unit_ml else None
+    effective_price_per_100ml = (
+        round(offer_total / offer_total_ml * 100, 2) if offer_total_ml else price_per_100ml
+    )
+
     lowered = title.lower()
     if re.search(r"kids?|baby|kind", lowered):
         use_case = "kinderen"
@@ -104,6 +129,11 @@ def normalize(row):
         "unit_ml": unit_ml,
         "total_ml": total_ml,
         "price_per_100ml": price_per_100ml,
+        "offer_quantity": offer_quantity,
+        "offer_total": round_money(offer_total),
+        "effective_each": round_money(effective_each),
+        "offer_total_ml": offer_total_ml,
+        "effective_price_per_100ml": effective_price_per_100ml,
         "shipping": number(row.get("price_shipping"), None),
         "image": row.get("image_default") or row.get("image_small"),
         "url": row.get("link"),
@@ -181,44 +211,58 @@ def product_card(product):
     badge = product["promotion"] or (
         f"{product['discount_percentage']}% korting" if product["discount_percentage"] else f"SPF {product['spf']}"
     )
-    if product["price_per_100ml"] is not None:
+    if product["promotion"]:
+        price_line = f'{product["offer_quantity"]} voor {money(product["offer_total"])}'
+        detail_parts = [f'effectief {money(product["effective_each"])} per stuk']
+        if product["effective_price_per_100ml"] is not None:
+            detail_parts.append(f'{money(product["effective_price_per_100ml"])} per 100 ml')
+        unit = " · ".join(detail_parts)
+    elif product["price_per_100ml"] is not None:
+        price_line = money(product["price"])
         unit = f"{money(product['price_per_100ml'])} per 100 ml"
     else:
+        price_line = money(product["price"])
         unit = "Bekijk de actievoorwaarden bij Plein.nl"
     old_price = f'<del>{money(product["old_price"])}</del>' if product["old_price"] else ""
+    quantity = ""
+    if product["unit_ml"] and product["offer_quantity"] > 1:
+        quantity = f'<p class="feed-quantity">{product["offer_quantity"]} × {product["unit_ml"]:g} ml</p>'
+    label = f'Bekijk {title}'
     return (
         '<article class="feed-card">'
+        f'<a class="feed-card-link" href="{html.escape(product["url"], quote=True)}" rel="sponsored nofollow noopener" target="_blank" aria-label="{html.escape(label, quote=True)}"></a>'
         f'<span class="feed-label">{html.escape(badge)}</span>'
         f'<img src="{html.escape(product["image"], quote=True)}" alt="{title}" loading="lazy" width="320" height="240">'
         '<div class="feed-card-body">'
         f'<span class="feed-brand">{brand}</span><h3>{title}</h3>'
-        f'<div class="feed-price"><strong>{money(product["price"])}</strong>{old_price}</div>'
+        f'{quantity}<div class="feed-price"><strong>{price_line}</strong>{old_price}</div>'
         f'<p class="feed-unit">{html.escape(unit)}</p>'
-        f'<a href="{html.escape(product["url"], quote=True)}" rel="sponsored nofollow noopener" target="_blank">Bekijk bij Plein.nl <span aria-hidden="true">→</span></a>'
+        '<span class="feed-cta">Bekijk hier <span aria-hidden="true">→</span></span>'
         '</div></article>'
     )
 
 
-def replace_region(path, name, products):
+def replace_region(path, name, products, more_href, more_label="Bekijk meer"):
     start = f"<!-- FEED:{name}:START -->"
     end = f"<!-- FEED:{name}:END -->"
     text = path.read_text(encoding="utf-8")
     if start not in text or end not in text:
         raise RuntimeError(f"Missing feed markers {name} in {path}")
     cards = "\n".join(product_card(item) for item in products)
-    replacement = f'{start}\n<div class="feed-grid">\n{cards}\n</div>\n{end}'
+    more = f'<div class="feed-more"><a href="{html.escape(more_href, quote=True)}">{html.escape(more_label)} <span aria-hidden="true">→</span></a></div>'
+    replacement = f'{start}\n<div class="feed-grid">\n{cards}\n</div>\n{more}\n{end}'
     before, rest = text.split(start, 1)
     _, after = rest.split(end, 1)
     path.write_text(before + replacement + after, encoding="utf-8")
 
 
 def update_pages(root, selections):
-    replace_region(root / "index.html", "HOME", selections["deals"][:6])
-    replace_region(root / "zonnebrand-kinderen.html", "KINDEREN", selections["kinderen"][:3])
-    replace_region(root / "zonnebrand-gezicht.html", "GEZICHT", selections["gezicht"][:3])
-    replace_region(root / "spf-30-of-50.html", "SPF", selections["lichaam"][:3])
+    replace_region(root / "index.html", "HOME", selections["deals"][:9], "vragen.html", "Bekijk alle keuzehulpen")
+    replace_region(root / "zonnebrand-kinderen.html", "KINDEREN", selections["kinderen"][:6], "index.html#aanbiedingen", "Bekijk meer aanbiedingen")
+    replace_region(root / "zonnebrand-gezicht.html", "GEZICHT", selections["gezicht"][:6], "index.html#aanbiedingen", "Bekijk meer aanbiedingen")
+    replace_region(root / "spf-30-of-50.html", "SPF", selections["lichaam"][:6], "index.html#aanbiedingen", "Bekijk meer aanbiedingen")
     winter = [p for p in selections["gezicht"] + selections["onderweg"] if p["spf"] >= 50]
-    replace_region(root / "zonnebrand-wintersport.html", "WINTERSPORT", diverse_products(winter, 3))
+    replace_region(root / "zonnebrand-wintersport.html", "WINTERSPORT", diverse_products(winter, 6), "index.html#aanbiedingen", "Bekijk meer aanbiedingen")
 
 
 def diverse_products(items, limit):
