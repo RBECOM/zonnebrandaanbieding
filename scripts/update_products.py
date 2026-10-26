@@ -110,6 +110,17 @@ def normalize(row):
     else:
         use_case = "lichaam"
 
+    if re.search(r"stick|lip", lowered):
+        product_form = "stick"
+    elif re.search(r"spray|mist|spuitbus", lowered):
+        product_form = "spray"
+    elif re.search(r"fluid|flu[iï]de", lowered):
+        product_form = "fluid"
+    elif re.search(r"olie|oil", lowered):
+        product_form = "olie"
+    else:
+        product_form = "crème/lotion"
+
     clean_title = re.sub(r"^(?:\d+\s*x\s+|\d+\s*\+\s*\d+\s*gratis:\s*|2e\s+halve\s+prijs:\s*)", "", title, flags=re.I)
     return {
         "sku": row.get("sku", ""),
@@ -119,6 +130,7 @@ def normalize(row):
         "full_title": title,
         "category": category,
         "use_case": use_case,
+        "product_form": product_form,
         "spf": spf,
         "spf_plus": bool(spf_match and spf_match.group(2)),
         "price": round(price, 2),
@@ -206,28 +218,25 @@ def money(value):
 
 
 def product_card(product):
-    title = html.escape(product["full_title"] or product["title"])
+    raw_title = product["title"] or product["full_title"]
+    title = html.escape(raw_title)
     brand = html.escape(product["brand"] or "Plein.nl")
     badge = product["promotion"] or (
         f"{product['discount_percentage']}% korting" if product["discount_percentage"] else f"SPF {product['spf']}"
     )
+    main_price = money(product["effective_each"])
+    unit_price = product["effective_price_per_100ml"]
+    secondary = f'{money(unit_price)} per 100 ml' if unit_price is not None else "Prijs per 100 ml niet beschikbaar"
     if product["promotion"]:
-        price_line = f'{product["offer_quantity"]} voor {money(product["offer_total"])}'
-        detail_parts = [f'effectief {money(product["effective_each"])} per stuk']
-        if product["effective_price_per_100ml"] is not None:
-            detail_parts.append(f'{money(product["effective_price_per_100ml"])} per 100 ml')
-        unit = " · ".join(detail_parts)
-    elif product["price_per_100ml"] is not None:
-        price_line = money(product["price"])
-        unit = f"{money(product['price_per_100ml'])} per 100 ml"
+        contents = f'{product["offer_quantity"]} × {product["unit_ml"]:g} ml' if product["unit_ml"] else f'{product["offer_quantity"]} stuks'
+        offer = f'{contents} voor {money(product["offer_total"])}'
+    elif product["pack_count"] > 1 and product["unit_ml"]:
+        offer = f'{product["pack_count"]} × {product["unit_ml"]:g} ml voor {money(product["price"])}'
+    elif product["old_price"]:
+        offer = f'Van {money(product["old_price"])} voor {money(product["price"])}'
     else:
-        price_line = money(product["price"])
-        unit = "Bekijk de actievoorwaarden bij Plein.nl"
-    old_price = f'<del>{money(product["old_price"])}</del>' if product["old_price"] else ""
-    quantity = ""
-    if product["unit_ml"] and product["offer_quantity"] > 1:
-        quantity = f'<p class="feed-quantity">{product["offer_quantity"]} × {product["unit_ml"]:g} ml</p>'
-    label = f'Bekijk {title}'
+        offer = "&nbsp;"
+    label = f'Bekijk {raw_title}'
     return (
         '<article class="feed-card">'
         f'<a class="feed-card-link" href="{html.escape(product["url"], quote=True)}" rel="sponsored nofollow noopener" target="_blank" aria-label="{html.escape(label, quote=True)}"></a>'
@@ -235,8 +244,8 @@ def product_card(product):
         f'<img src="{html.escape(product["image"], quote=True)}" alt="{title}" loading="lazy" width="320" height="240">'
         '<div class="feed-card-body">'
         f'<span class="feed-brand">{brand}</span><h3>{title}</h3>'
-        f'{quantity}<div class="feed-price"><strong>{price_line}</strong>{old_price}</div>'
-        f'<p class="feed-unit">{html.escape(unit)}</p>'
+        f'<div class="feed-price-stack"><div class="feed-price"><strong>{main_price}</strong><span>per stuk</span></div>'
+        f'<p class="feed-unit">{html.escape(secondary)}</p><p class="feed-offer">{offer}</p></div>'
         '<span class="feed-cta">Bekijk hier <span aria-hidden="true">→</span></span>'
         '</div></article>'
     )
@@ -256,13 +265,14 @@ def replace_region(path, name, products, more_href, more_label="Bekijk meer"):
     path.write_text(before + replacement + after, encoding="utf-8")
 
 
-def update_pages(root, selections):
-    replace_region(root / "index.html", "HOME", selections["deals"][:9], "vragen.html", "Bekijk alle keuzehulpen")
-    replace_region(root / "zonnebrand-kinderen.html", "KINDEREN", selections["kinderen"][:6], "index.html#aanbiedingen", "Bekijk meer aanbiedingen")
-    replace_region(root / "zonnebrand-gezicht.html", "GEZICHT", selections["gezicht"][:6], "index.html#aanbiedingen", "Bekijk meer aanbiedingen")
-    replace_region(root / "spf-30-of-50.html", "SPF", selections["lichaam"][:6], "index.html#aanbiedingen", "Bekijk meer aanbiedingen")
+def update_pages(root, selections, catalogue):
+    replace_region(root / "index.html", "HOME", selections["deals"][:9], "aanbiedingen.html", "Bekijk alle aanbiedingen")
+    replace_region(root / "zonnebrand-kinderen.html", "KINDEREN", selections["kinderen"][:6], "aanbiedingen.html?gebruik=kinderen", "Bekijk meer aanbiedingen")
+    replace_region(root / "zonnebrand-gezicht.html", "GEZICHT", selections["gezicht"][:6], "aanbiedingen.html?gebruik=gezicht", "Bekijk meer aanbiedingen")
+    replace_region(root / "spf-30-of-50.html", "SPF", selections["lichaam"][:6], "aanbiedingen.html", "Bekijk meer aanbiedingen")
     winter = [p for p in selections["gezicht"] + selections["onderweg"] if p["spf"] >= 50]
-    replace_region(root / "zonnebrand-wintersport.html", "WINTERSPORT", diverse_products(winter, 6), "index.html#aanbiedingen", "Bekijk meer aanbiedingen")
+    replace_region(root / "zonnebrand-wintersport.html", "WINTERSPORT", diverse_products(winter, 6), "aanbiedingen.html?spf=50", "Bekijk meer aanbiedingen")
+    replace_region(root / "aanbiedingen.html", "LISTING", catalogue[:24], "#filters", "Pas de filters aan")
 
 
 def diverse_products(items, limit):
@@ -296,6 +306,11 @@ def main():
             products.append(item)
     products = deduplicate(products)
     selections = choose(products)
+    catalogue = sorted(products, key=lambda p: (
+        not bool(p["promotion"] or p["discount_percentage"]),
+        p["effective_price_per_100ml"] if p["effective_price_per_100ml"] is not None else 999999,
+        p["effective_each"],
+    ))
     payload = {
         "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "source": "Plein.nl via Daisycon",
@@ -303,11 +318,12 @@ def main():
         "eligible_sun_products": len(products),
         "shipping_note": "Bezorgkosten gelden per bestelling en kunnen afhangen van de winkelmand.",
         "selections": selections,
+        "catalogue": catalogue,
     }
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    update_pages(Path(__file__).resolve().parents[1], selections)
+    update_pages(Path(__file__).resolve().parents[1], selections, catalogue)
     counts = ", ".join(f"{key}={len(value)}" for key, value in selections.items())
     print(f"Processed {total_rows} rows; eligible={len(products)}; {counts}")
 
