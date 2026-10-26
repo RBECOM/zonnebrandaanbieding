@@ -53,7 +53,7 @@ def normalize(row):
         return None
     if not row.get("image_default") or not row.get("link"):
         return None
-    if EXCLUDE.search(text):
+    if EXCLUDE.search(title):
         return None
     if category.lower() not in DIRECT_CATEGORIES and not SUN_TERMS.search(title):
         return None
@@ -277,6 +277,20 @@ def update_pages(root, selections, catalogue):
     winter = [p for p in selections["gezicht"] + selections["onderweg"] if p["spf"] >= 50]
     replace_region(root / "zonnebrand-wintersport.html", "WINTERSPORT", diverse_products(winter, 6), "aanbiedingen.html?spf=50", "Bekijk meer aanbiedingen")
     replace_region(root / "aanbiedingen.html", "LISTING", catalogue[:24], "#filters", "Pas de filters aan")
+    top_patterns = [
+        "oil control dry touch gel-crème spf 50+ 50 ml", "oil control gel-creme spf 50+ 50 ml",
+        "every day sun spf 50 spray 180 ml", "super uv over make-up mist spf 50+ 75 ml",
+        "ideal bronze beschermende mist spf 30 150 ml", "sun pigment control spf 50+ 50 ml",
+        "zonnecrème gezicht anti-shine spf 50 50 ml", "protect & bronze zonnebrand spf 30 200 ml",
+        "ideal bronze beschermende melkspray", "6x hawaiian tropic luminosity zonnebrand lotion very high spf50+",
+    ]
+    top10 = []
+    for pattern in top_patterns:
+        matches = [p for p in catalogue if pattern.casefold() in p["full_title"].casefold()]
+        if matches:
+            singles = [p for p in matches if p["pack_count"] == 1]
+            top10.append((singles or matches)[0])
+    replace_region(root / "top-10-zonnebrand.html", "TOP10", top10[:10], "aanbiedingen.html", "Bekijk alle aanbiedingen")
     category_pages = {
         "zonnebrand-lichaam.html": ("LICHAAM", lambda p: p["use_case"] == "lichaam"),
         "zonnebrandspray.html": ("SPRAY", lambda p: p["product_form"] == "spray"),
