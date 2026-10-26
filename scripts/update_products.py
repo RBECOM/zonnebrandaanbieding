@@ -21,7 +21,7 @@ SUN_TERMS = re.compile(r"zonnebrand|zonnecr[eè]me|sun\s*(?:cream|lotion|spray|f
 PROMO = re.compile(r"^(\d+)\s*\+\s*(\d+)\s*gratis:|^2e\s+halve\s+prijs:", re.I)
 PACK = re.compile(r"^\s*(\d+)\s*x\s+", re.I)
 SPF = re.compile(r"\bSPF\s*([0-9]{1,2})(\+)?", re.I)
-ML = re.compile(r"([0-9]+(?:[.,][0-9]+)?)\s*ml\b", re.I)
+AMOUNT = re.compile(r"([0-9]+(?:[.,][0-9]+)?)\s*(ml|gr|g)\b", re.I)
 
 
 def number(value, default=0.0):
@@ -74,8 +74,11 @@ def normalize(row):
     pack_match = PACK.search(title)
     pack_count = int(pack_match.group(1)) if pack_match else 1
     size_text = (row.get("size") or "").strip()
-    ml_match = ML.search(size_text)
-    unit_ml = number(ml_match.group(1)) if ml_match else None
+    amount_match = AMOUNT.search(size_text)
+    unit_ml = number(amount_match.group(1)) if amount_match else None
+    unit_label = amount_match.group(2).lower() if amount_match else None
+    if unit_label == "g":
+        unit_label = "gr"
     total_ml = unit_ml * pack_count if unit_ml else None
     reliable_unit_price = bool(total_ml and not promo)
     price_per_100ml = round(price / total_ml * 100, 2) if reliable_unit_price else None
@@ -139,6 +142,7 @@ def normalize(row):
         "promotion": promo or None,
         "pack_count": pack_count,
         "unit_ml": unit_ml,
+        "unit_label": unit_label,
         "total_ml": total_ml,
         "price_per_100ml": price_per_100ml,
         "offer_quantity": offer_quantity,
@@ -228,10 +232,10 @@ def product_card(product):
     unit_price = product["effective_price_per_100ml"]
     secondary = f'{money(unit_price)} per 100 ml' if unit_price is not None else "Prijs per 100 ml niet beschikbaar"
     if product["promotion"]:
-        contents = f'{product["offer_quantity"]} × {product["unit_ml"]:g} ml' if product["unit_ml"] else f'{product["offer_quantity"]} stuks'
+        contents = f'{product["offer_quantity"]} × {product["unit_ml"]:g} {product["unit_label"]}' if product["unit_ml"] else f'{product["offer_quantity"]} stuks'
         offer = f'{contents} voor {money(product["offer_total"])}'
     elif product["pack_count"] > 1 and product["unit_ml"]:
-        offer = f'{product["pack_count"]} × {product["unit_ml"]:g} ml voor {money(product["price"])}'
+        offer = f'{product["pack_count"]} × {product["unit_ml"]:g} {product["unit_label"]} voor {money(product["price"])}'
     elif product["old_price"]:
         offer = f'Van {money(product["old_price"])} voor {money(product["price"])}'
     else:
@@ -273,6 +277,18 @@ def update_pages(root, selections, catalogue):
     winter = [p for p in selections["gezicht"] + selections["onderweg"] if p["spf"] >= 50]
     replace_region(root / "zonnebrand-wintersport.html", "WINTERSPORT", diverse_products(winter, 6), "aanbiedingen.html?spf=50", "Bekijk meer aanbiedingen")
     replace_region(root / "aanbiedingen.html", "LISTING", catalogue[:24], "#filters", "Pas de filters aan")
+    category_pages = {
+        "zonnebrand-lichaam.html": ("LICHAAM", lambda p: p["use_case"] == "lichaam"),
+        "zonnebrandspray.html": ("SPRAY", lambda p: p["product_form"] == "spray"),
+        "zonnebrandstick.html": ("STICK", lambda p: p["product_form"] == "stick"),
+        "zonnebrandfluid.html": ("FLUID", lambda p: p["product_form"] == "fluid"),
+        "zonnebrandcreme-lotion.html": ("CREME", lambda p: p["product_form"] == "crème/lotion"),
+        "zonnebrandolie.html": ("OLIE", lambda p: p["product_form"] == "olie"),
+    }
+    query_values = {"LICHAAM": "gebruik=lichaam", "SPRAY": "vorm=spray", "STICK": "vorm=stick", "FLUID": "vorm=fluid", "CREME": "vorm=crème%2Flotion", "OLIE": "vorm=olie"}
+    for filename, (marker, predicate) in category_pages.items():
+        items = [p for p in catalogue if predicate(p)]
+        replace_region(root / filename, marker, items[:12], f"aanbiedingen.html?{query_values[marker]}", "Bekijk alle passende producten")
 
 
 def diverse_products(items, limit):
