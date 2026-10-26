@@ -225,6 +225,7 @@ def product_card(product):
     raw_title = product["title"] or product["full_title"]
     title = html.escape(raw_title)
     brand = html.escape(product["brand"] or "Plein.nl")
+    product_form = html.escape(product["product_form"].capitalize())
     badge = product["promotion"] or (
         f"{product['discount_percentage']}% korting" if product["discount_percentage"] else f"SPF {product['spf']}"
     )
@@ -247,7 +248,7 @@ def product_card(product):
         f'<span class="feed-label">{html.escape(badge)}</span>'
         f'<img src="{html.escape(product["image"], quote=True)}" alt="{title}" loading="lazy" width="320" height="240">'
         '<div class="feed-card-body">'
-        f'<span class="feed-brand">{brand}</span><h3>{title}</h3>'
+        f'<span class="feed-brand">{brand} - {product_form}</span><h3>{title}</h3>'
         f'<div class="feed-price-stack"><div class="feed-price"><strong>{main_price}</strong><span>per stuk</span></div>'
         f'<p class="feed-unit">{html.escape(secondary)}</p><p class="feed-offer">{offer}</p></div>'
         '<span class="feed-cta">Bekijk hier <span aria-hidden="true">→</span></span>'
