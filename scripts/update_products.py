@@ -13,6 +13,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 DIRECT_CATEGORIES = {"zonnebrandolie", "zon"}
@@ -270,7 +271,23 @@ def replace_region(path, name, products, more_href, more_label="Bekijk meer"):
     path.write_text(before + replacement + after, encoding="utf-8")
 
 
-def update_pages(root, selections, catalogue):
+def replace_text_region(path, name, replacement):
+    start = f"<!-- FEED:{name}:START -->"
+    end = f"<!-- FEED:{name}:END -->"
+    text = path.read_text(encoding="utf-8")
+    if start not in text or end not in text:
+        raise RuntimeError(f"Missing feed markers {name} in {path}")
+    before, rest = text.split(start, 1)
+    _, after = rest.split(end, 1)
+    path.write_text(before + start + replacement + end + after, encoding="utf-8")
+
+
+def update_pages(root, selections, catalogue, updated_at):
+    local_time = updated_at.astimezone(ZoneInfo("Europe/Amsterdam"))
+    months = ("januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december")
+    readable = f'{local_time.day} {months[local_time.month - 1]} {local_time.year} om {local_time:%H:%M}'
+    freshness = f'<b>Laatst bijgewerkt:</b> <time datetime="{updated_at.isoformat()}">{readable}</time>'
+    replace_text_region(root / "aanbiedingen.html", "UPDATED", freshness)
     replace_region(root / "index.html", "HOME", selections["deals"][:9], "aanbiedingen.html", "Bekijk alle aanbiedingen")
     replace_region(root / "zonnebrand-kinderen.html", "KINDEREN", selections["kinderen"][:6], "aanbiedingen.html?gebruik=kinderen", "Bekijk meer aanbiedingen")
     replace_region(root / "zonnebrand-gezicht.html", "GEZICHT", selections["gezicht"][:6], "aanbiedingen.html?gebruik=gezicht", "Bekijk meer aanbiedingen")
@@ -337,13 +354,20 @@ def main():
             products.append(item)
     products = deduplicate(products)
     selections = choose(products)
+    if total_rows < 1000:
+        sys.exit(f"Feed validation failed: only {total_rows} rows received")
+    if len(products) < 50:
+        sys.exit(f"Feed validation failed: only {len(products)} eligible sunscreen products")
+    if len(selections["deals"]) < 3:
+        sys.exit("Feed validation failed: fewer than 3 deal products")
     catalogue = sorted(products, key=lambda p: (
         not bool(p["promotion"] or p["discount_percentage"]),
         p["effective_price_per_100ml"] if p["effective_price_per_100ml"] is not None else 999999,
         p["effective_each"],
     ))
+    updated_at = datetime.now(timezone.utc).replace(microsecond=0)
     payload = {
-        "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "updated_at": updated_at.isoformat(),
         "source": "Plein.nl via Daisycon",
         "total_feed_products": total_rows,
         "eligible_sun_products": len(products),
@@ -354,7 +378,7 @@ def main():
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    update_pages(Path(__file__).resolve().parents[1], selections, catalogue)
+    update_pages(Path(__file__).resolve().parents[1], selections, catalogue, updated_at)
     counts = ", ".join(f"{key}={len(value)}" for key, value in selections.items())
     print(f"Processed {total_rows} rows; eligible={len(products)}; {counts}")
 

@@ -7,7 +7,16 @@ Allow: /
 User-agent: ClaudeBot
 Allow: /
 
+User-agent: Claude-SearchBot
+Allow: /
+
+User-agent: Claude-User
+Allow: /
+
 User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: Google-Extended
 Allow: /
 
 Sitemap: https://zonnebrandaanbieding.nl/sitemap.xml

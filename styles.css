@@ -75,6 +75,11 @@
 .hero>.hero-media{position:absolute;inset:0;display:block;width:100%;height:100%}
 .hero>.hero-media img{display:block;width:100%;height:100%;object-fit:cover;object-position:center}
 @media(max-width:700px){.hero>.hero-media img{object-position:center}}
+.visual-header.collection-header>img{object-position:right center}
+@media(max-width:700px){
+  .site-header .menu-content .mobile-primary a{font-size:14px!important;font-weight:800!important;line-height:1.35}
+  .visual-header.collection-header>img{object-position:right center}
+}
 
 /* Homepage question route and richer question hub */
 .questions-banner{margin:28px 0 0;background:#eaf8ff;border:1px solid var(--line);border-radius:16px;display:grid;grid-template-columns:1fr 1.25fr;overflow:hidden}
@@ -106,6 +111,7 @@
 .site-header .mobile-primary{display:grid;align-content:start}
 .mobile-primary a{padding:7px 0;text-decoration:none;font-size:13px;font-weight:750;color:var(--blue)}
 .filter-panel{position:relative}
+.feed-freshness{margin-top:12px!important;font-size:13px!important;color:var(--muted)!important}
 .filter-panel.has-active-filters{padding-top:42px}
 .filter-panel.has-active-filters:before{content:attr(data-active-count);position:absolute;top:13px;left:20px;color:#17603c;font-size:12px;font-weight:850}
 .filter-panel .filter-active label,.filter-panel label.filter-active{color:#17603c;font-weight:850}
