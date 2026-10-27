@@ -9,6 +9,7 @@ import os
 import re
 import sys
 import urllib.request
+from urllib.parse import quote
 from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
@@ -222,7 +223,26 @@ def money(value):
     return f"€ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
-def product_card(product):
+def tracked_url(url, page_id, placement, sku):
+    """Add Daisycon Sub IDs without changing campaign, media or deeplink data."""
+    values = {
+        "ws": page_id[:100],
+        "ws2": placement[:50],
+        "ws3": str(sku or "onbekend")[:50],
+    }
+    tracked = url
+    for parameter, value in values.items():
+        encoded = quote(value, safe="-_.")
+        pattern = rf"([?&]){parameter}=[^&]*"
+        if re.search(pattern, tracked):
+            tracked = re.sub(pattern, lambda match: f"{match.group(1)}{parameter}={encoded}", tracked, count=1)
+        else:
+            separator = "&" if "?" in tracked else "?"
+            tracked += f"{separator}{parameter}={encoded}"
+    return tracked
+
+
+def product_card(product, page_id, placement):
     raw_title = product["title"] or product["full_title"]
     title = html.escape(raw_title)
     brand = html.escape(product["brand"] or "Plein.nl")
@@ -243,9 +263,10 @@ def product_card(product):
     else:
         offer = "&nbsp;"
     label = f'Bekijk {raw_title}'
+    click_url = tracked_url(product["url"], page_id, placement, product["sku"])
     return (
         '<article class="feed-card">'
-        f'<a class="feed-card-link" href="{html.escape(product["url"], quote=True)}" rel="sponsored nofollow noopener" target="_blank" aria-label="{html.escape(label, quote=True)}"></a>'
+        f'<a class="feed-card-link" href="{html.escape(click_url, quote=True)}" rel="sponsored nofollow noopener" target="_blank" aria-label="{html.escape(label, quote=True)}"></a>'
         f'<span class="feed-label">{html.escape(badge)}</span>'
         f'<img src="{html.escape(product["image"], quote=True)}" alt="{title}" loading="lazy" width="320" height="240">'
         '<div class="feed-card-body">'
@@ -263,7 +284,8 @@ def replace_region(path, name, products, more_href, more_label="Bekijk meer"):
     text = path.read_text(encoding="utf-8")
     if start not in text or end not in text:
         raise RuntimeError(f"Missing feed markers {name} in {path}")
-    cards = "\n".join(product_card(item) for item in products)
+    page_id = "homepage" if path.stem == "index" else path.stem
+    cards = "\n".join(product_card(item, page_id, name.lower()) for item in products)
     more = f'<div class="feed-more"><a href="{html.escape(more_href, quote=True)}">{html.escape(more_label)} <span aria-hidden="true">→</span></a></div>'
     replacement = f'{start}\n<div class="feed-grid">\n{cards}\n</div>\n{more}\n{end}'
     before, rest = text.split(start, 1)
