@@ -43,6 +43,40 @@
   .mobile-primary a{padding:9px 0;text-decoration:none;font-size:14px;font-weight:800;color:var(--blue)}
 }
 
+/* Separate desktop and mobile menu structures */
+.menu-content{width:560px;grid-template-columns:repeat(3,minmax(0,1fr))}
+.site-header .mobile-primary{display:none}
+@media(max-width:700px){
+  .site-header .mobile-primary{display:grid}
+  .menu-content{grid-template-columns:1fr}
+  .menu-content section{display:grid}
+}
+
+/* Homepage question route and richer question hub */
+.questions-banner{margin:28px 0 0;background:#eaf8ff;border:1px solid var(--line);border-radius:16px;display:grid;grid-template-columns:1fr 1.25fr;overflow:hidden}
+.questions-image-link,.questions-image-link img{display:block;width:100%;height:100%;min-height:260px;object-fit:cover}
+.questions-banner>div{padding:32px;display:flex;flex-direction:column;align-items:flex-start;justify-content:center}
+.questions-banner h3{font-size:27px;margin:5px 0}
+.questions-banner p{margin:0 0 22px;color:#36566b}
+.question-section-heading{margin-top:42px;max-width:700px}
+.question-section-heading h2{margin-top:7px;margin-bottom:10px}
+.question-section-heading p{margin-top:0}
+.question-grid-rich{grid-template-columns:repeat(2,minmax(0,1fr));gap:17px}
+.question-grid-rich a{position:relative;display:grid;grid-template-columns:48px 1fr;column-gap:14px;align-content:start;min-height:190px;padding:22px;border-radius:15px;box-shadow:0 9px 24px rgba(18,50,74,.06);transition:transform .18s,box-shadow .18s,border-color .18s}
+.question-grid-rich a:hover{transform:translateY(-3px);border-color:#9cc8df;box-shadow:0 15px 32px rgba(18,50,74,.12)}
+.question-grid-rich .question-icon{grid-row:1/4;width:46px;height:46px;display:grid;place-items:center;margin:0;background:var(--yellow);border-radius:12px;color:var(--ink);font-size:17px;font-weight:900}
+.question-grid-rich strong{font-size:17px;line-height:1.3}
+.question-grid-rich a>span:not(.question-icon):not(.question-cta){grid-column:2;margin-top:7px}
+.question-grid-rich .question-cta{grid-column:2;align-self:end;margin-top:20px!important;color:var(--blue)!important;font-weight:850!important}
+@media(max-width:700px){
+  .questions-banner{grid-template-columns:1fr}
+  .questions-image-link,.questions-image-link img{min-height:0;aspect-ratio:16/10}
+  .questions-banner>div{padding:25px}
+  .questions-banner .button{width:100%;justify-content:space-between}
+  .question-grid-rich{grid-template-columns:1fr}
+  .question-grid-rich a{min-height:170px}
+}
+
 /* Responsive menu, compact listing heading and selected filter feedback */
 .menu-content{width:720px;grid-template-columns:repeat(4,minmax(0,1fr));align-items:start}
 .site-header .mobile-primary{display:grid;align-content:start}
